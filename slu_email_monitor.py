@@ -2,6 +2,8 @@ import os
 import time
 import requests
 import base64
+import signal
+import sys
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -320,12 +322,24 @@ def get_seconds_until_next_10min():
     next_time = datetime(next_year, next_month, next_day, next_hour, next_minute, 0)
     return (next_time - now).total_seconds(), next_time
 
+def signal_handler(sig, frame):
+    """Handle graceful shutdown."""
+    print("\n\n⚠️  Shutdown signal received...")
+    print("✋ Stopping email monitor gracefully...")
+    print("✅ Email monitor stopped. Goodbye!\n")
+    sys.exit(0)
+
 def run_standalone():
     """Run email monitor in standalone mode with 10-minute intervals."""
+    # Set up signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     print("📧 Starting Email Monitor")
     print(f"🕓 Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📬 Monitoring email: {STUDENT_EMAIL}")
-    print(f"🔔 Discord webhook: {'Configured' if WEBHOOK_URL else 'Not configured'}\n")
+    print(f"🔔 Discord webhook: {'Configured' if WEBHOOK_URL else 'Not configured'}")
+    print(f"\n🚫 To stop the monitor, press Ctrl+C\n")
 
     while True:
         print(f"⏰ Running email check at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
