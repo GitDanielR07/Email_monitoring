@@ -369,8 +369,8 @@ def run_standalone():
             print(f"❌ Error checking email: {e}")
         
         wait_sec, next_run = get_seconds_until_next_5min()
-        print(f"💤 Waiting {int(wait_sec) + 30}s until next check at {next_run.strftime('%H:%M:%S')}...\n")
-        time.sleep(wait_sec + 30)
+        print(f"💤 Waiting {int(wait_sec)}s until next check at {next_run.strftime('%H:%M:%S')}...\n")
+        time.sleep(wait_sec)
 
 if __name__ == "__main__":
     run_standalone()
