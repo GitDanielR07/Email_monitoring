@@ -223,13 +223,10 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
             print(f"   ⚠️ Failed to parse date '{date_str}': {e}")
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
     
-    # Discord embed timestamp must be in UTC format (Discord converts to user's timezone automatically)
+    # Use the email's actual timestamp for the embed (not current time)
     if parsed:
-        # Ensure parsed is timezone-aware (convert to UTC if needed)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        # Convert to UTC for Discord
-        embed_timestamp = parsed.astimezone(timezone.utc).isoformat()
+        # Keep the parsed datetime as-is with its timezone info for the embed
+        embed_timestamp = parsed.isoformat()
     else:
         embed_timestamp = datetime.now(timezone.utc).isoformat()
     

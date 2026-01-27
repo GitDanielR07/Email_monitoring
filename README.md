@@ -94,30 +94,33 @@ GMAIL_TOKEN_FILE=config/token.json
 ### 6. First Run - Authorize Gmail Access
 
 ```bash
-python src/monitor_email.py
+python monitor_email.py
 ```
 
 On first run:
 1. A browser window will open
 2. Sign in to your Gmail account
 3. Grant the requested permissions
-4. The `token.json` file will be created automatically
+4. The `config/token.json` file will be created automatically
 
 ## 📂 File Structure
 
 ```
 email_checker/
-├── src/
-│   ├── monitor_email.py       # Main email monitor (run this!)
-│   ├── email_standalone.py    # CLI runner
-│   ├── email_helper.py        # Helpers
-│   ├── delete_read_emails.py  # Utility to clean read mail
-│   └── utils.py
-├── config/                    # credentials.json, token.json (not committed)
-├── data/logs/                 # runtime logs (ignored)
-├── assets/                    # icons
-├── build.py                   # build helper (PyInstaller)
-├── monitor_email.spec         # PyInstaller spec
+├── monitor_email.py           # Main email monitor (run this!)
+├── email_standalone.py        # Alternative CLI runner
+├── email_helper.py            # Email processing helpers
+├── delete_read_emails.py      # Utility to clean read mail
+├── utils.py                   # Utility functions
+├── build.py                   # Build helper (PyInstaller)
+├── monitor_email.spec         # PyInstaller spec file
+├── monitor_email.exe          # Built executable (Windows)
+├── config/
+│   ├── credentials.json       # Gmail API credentials (not committed)
+│   └── token.json            # OAuth token (auto-generated, not committed)
+├── logs/                      # Runtime logs (ignored)
+├── assets/                    # Icons and resources
+├── build/                     # Build artifacts (ignored)
 ├── requirements.txt
 ├── .env
 └── README.md
@@ -125,17 +128,25 @@ email_checker/
 
 ## 🎮 Usage
 
-### Run the Monitor
+### Run the Monitor (Python)
 
 ```bash
-python src/monitor_email.py
+python monitor_email.py
+```
+
+### Run the Monitor (Executable)
+
+For Windows, you can run the pre-built executable:
+```bash
+.\monitor_email.exe
 ```
 
 The monitor will:
-- ✅ Check for new emails every 10 minutes
+- ✅ Check for new emails every 5 minutes
 - ✅ Display which emails are processed or skipped
 - ✅ Send allowed emails to Discord as embeds
 - ✅ Mark forwarded emails as read
+- ✅ Show timestamps in your local timezone
 
 ### Stop the Monitor
 
