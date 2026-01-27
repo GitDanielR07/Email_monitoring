@@ -1,6 +1,5 @@
 # Credentials and sensitive files
-config/credentials.json
-config/token.json
+config/
 .env
 
 # Python
@@ -43,7 +42,9 @@ Thumbs.db
 build/
 monitor_email/
 monitor_email.exe
-data/logs/
+data/
+logs/
+assets/
 # Temporary files
 *.tmp
 *.temp
