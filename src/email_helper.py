@@ -11,7 +11,7 @@ if CURRENT_DIR in sys.path:
 import time
 import requests
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -204,18 +204,32 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
     # Format date more cleanly if available
     date_display = None
     parsed = None
+    ph_tz = timezone(timedelta(hours=8))  # PH timezone is UTC+8
+    
     if date_str:
         try:
             # Try to parse and format date (remove timezone for cleaner look)
             import email.utils
             parsed = email.utils.parsedate_to_datetime(date_str)
             if parsed:
-                date_display = parsed.strftime("%B %d, %Y at %I:%M %p")
-        except:
+                # Convert to PH timezone (UTC+8)
+                if parsed.tzinfo is None:
+                    # If no timezone, assume UTC
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                parsed_ph = parsed.astimezone(ph_tz)
+                date_display = parsed_ph.strftime("%B %d, %Y at %I:%M %p")
+                print(f"   📅 Parsed date: {date_str} -> {date_display} (PH time)")
+        except Exception as e:
+            print(f"   ⚠️ Failed to parse date '{date_str}': {e}")
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
     
-    # Use email's timestamp if available, otherwise use current time
-    embed_timestamp = parsed.isoformat() if parsed else datetime.now(timezone.utc).isoformat()
+    # Use email's timestamp if available (in PH timezone for Discord embed), otherwise use current time in PH
+    if parsed:
+        parsed_ph = parsed.astimezone(ph_tz)
+        embed_timestamp = parsed_ph.isoformat()
+    else:
+        now_ph = datetime.now(ph_tz)
+        embed_timestamp = now_ph.isoformat()
     
     embed = {
         "title": truncate_text(subject or "(No Subject)", 256),
@@ -283,6 +297,7 @@ def check_email_fast():
         print(f"\n📧 Checking email:")
         print(f"   From: {sender}")
         print(f"   Subject: {subject}")
+        print(f"   Raw Date Header: {date_str}")
 
         # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
