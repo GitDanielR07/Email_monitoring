@@ -4,6 +4,7 @@ import requests
 import base64
 import signal
 import sys
+import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -19,6 +20,18 @@ WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_EMAIL")
 STUDENT_EMAIL = os.getenv("STUDENT_EMAIL")
 CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json")
 TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", "token.json")
+
+# ===== Logging setup =====
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, "monitor_email.log"))
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
@@ -324,6 +337,7 @@ def get_seconds_until_next_10min():
 
 def signal_handler(sig, frame):
     """Handle graceful shutdown."""
+    logger.info("Email Monitor Stopped")
     print("\n\n⚠️  Shutdown signal received...")
     print("✋ Stopping email monitor gracefully...")
     print("✅ Email monitor stopped. Goodbye!\n")
@@ -334,6 +348,11 @@ def run_standalone():
     # Set up signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    
+    logger.info("===================================================")
+    logger.info("Email Monitor Started")
+    logger.info(f"Monitoring: {STUDENT_EMAIL}")
+    logger.info("===================================================")
     
     print("📧 Starting Email Monitor")
     print(f"🕓 Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -346,6 +365,7 @@ def run_standalone():
         try:
             check_email_fast()
         except Exception as e:
+            logger.error(f"Error checking email: {e}")
             print(f"❌ Error checking email: {e}")
         
         wait_sec, next_run = get_seconds_until_next_10min()

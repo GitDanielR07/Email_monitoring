@@ -41,3 +41,17 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# PyInstaller
+*.exe
+*.spec
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
