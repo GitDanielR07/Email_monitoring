@@ -218,9 +218,7 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
                     parsed = parsed.replace(tzinfo=timezone.utc)
                 parsed_ph = parsed.astimezone(ph_tz)
                 date_display = parsed_ph.strftime("%B %d, %Y at %I:%M %p")
-                print(f"   📅 Parsed date: {date_str} -> {date_display} (PH time)")
         except Exception as e:
-            print(f"   ⚠️ Failed to parse date '{date_str}': {e}")
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
     
     # Use the email's actual timestamp for the embed (not current time)
@@ -292,15 +290,10 @@ def check_email_fast():
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
         date_str = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
-        # Debug: Show all emails being checked
-        print(f"\n📧 Checking email:")
-        print(f"   From: {sender}")
-        print(f"   Subject: {subject}")
-        print(f"   Raw Date Header: {date_str}")
+        # Log email being checked
 
         # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
-            print("   ✅ ALLOWED - Processing email...")
             # Extract email body
             body = get_email_body(msg_data["payload"])
             
@@ -320,10 +313,6 @@ def check_email_fast():
                 id=msg["id"],
                 body={"removeLabelIds": ["UNREAD"]}
             ).execute()
-        else:
-            print("   ⏭️ SKIPPED - Not from allowed sources")
-
-    print("✅ Email check completed!")
 
 def get_seconds_until_next_10min():
     """Calculate seconds until next 10-minute mark (00, 10, 20, 30, 40, 50)."""

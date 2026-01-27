@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['src/monitor_email.py'],
+    ['monitor_email.py'],
     pathex=[],
     binaries=[],
     datas=[],

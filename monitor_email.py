@@ -5,7 +5,7 @@ import base64
 import signal
 import sys
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -209,21 +209,38 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
     
     # Format date more cleanly if available
     date_display = None
+    parsed = None
+    ph_tz = timezone(timedelta(hours=8))  # PH timezone is UTC+8
+    
     if date_str:
         try:
             # Try to parse and format date (remove timezone for cleaner look)
             import email.utils
             parsed = email.utils.parsedate_to_datetime(date_str)
             if parsed:
-                date_display = parsed.strftime("%B %d, %Y at %I:%M %p")
-        except:
+                # For display, convert to PH timezone
+                if parsed.tzinfo is None:
+                    # If no timezone, assume UTC
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                parsed_ph = parsed.astimezone(ph_tz)
+                date_display = parsed_ph.strftime("%B %d, %Y at %I:%M %p")
+                logger.debug(f"Parsed date: {date_str} -> {date_display}")
+        except Exception as e:
+            logger.warning(f"Failed to parse date: {e}")
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
+    
+    # Use the email's actual timestamp for the embed (not current time)
+    if parsed:
+        # Keep the parsed datetime as-is with its timezone info for the embed
+        embed_timestamp = parsed.isoformat()
+    else:
+        embed_timestamp = datetime.now(timezone.utc).isoformat()
     
     embed = {
         "title": truncate_text(subject or "(No Subject)", 256),
         "description": body_truncated,
         "color": 0x00E676,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": embed_timestamp,
         "author": {
             "name": truncate_text(sender_name, 256),
             "icon_url": "https://www.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"
@@ -288,7 +305,7 @@ def check_email_fast():
 
         # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
-            print("   ✅ ALLOWED - Processing email...")
+            logger.info(f"Processing allowed email: {subject}")
             # Extract email body
             body = get_email_body(msg_data["payload"])
             
@@ -309,9 +326,9 @@ def check_email_fast():
                 body={"removeLabelIds": ["UNREAD"]}
             ).execute()
         else:
-            print("   ⏭️ SKIPPED - Not from allowed sources")
+            logger.debug(f"Skipped: {subject}")
 
-    print("✅ Email check completed!")
+    logger.info("Email check completed")
 
 def get_seconds_until_next_5min():
     """Calculate seconds until next 5-minute mark (00, 05, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)."""
