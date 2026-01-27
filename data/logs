@@ -1,0 +1,38 @@
+2026-01-21 21:13:33,814 [INFO] ==================================================
+2026-01-21 21:13:33,822 [INFO] ==================================================
+2026-01-21 21:13:33,828 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-21 21:15:00,002 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-21 21:15:57,775 [INFO] ==================================================
+2026-01-21 21:15:57,775 [INFO] Email Monitor Started
+2026-01-21 21:15:57,775 [INFO] Check interval: Every 5 minutes
+2026-01-21 21:15:57,775 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-21 21:15:57,776 [INFO] ==================================================
+2026-01-21 21:15:57,777 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-21 21:18:21,602 [INFO] ==================================================
+2026-01-21 21:18:21,602 [INFO] Email Monitor Started
+2026-01-21 21:18:21,602 [INFO] Check interval: Every 5 minutes
+2026-01-21 21:18:21,603 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-21 21:18:21,603 [INFO] ==================================================
+2026-01-27 16:53:05,238 [INFO] ===================================================
+2026-01-27 16:53:05,238 [INFO] Email Monitor Started
+2026-01-27 16:53:05,238 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-27 16:53:05,238 [INFO] ===================================================
+2026-01-27 16:53:05,244 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 16:54:10,658 [INFO] ===================================================
+2026-01-27 16:54:10,658 [INFO] Email Monitor Started
+2026-01-27 16:54:10,658 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-27 16:54:10,658 [INFO] ===================================================
+2026-01-27 16:54:10,665 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 16:54:12,103 [INFO] ===================================================
+2026-01-27 16:54:12,103 [INFO] Email Monitor Started
+2026-01-27 16:54:12,103 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-27 16:54:12,103 [INFO] ===================================================
+2026-01-27 16:54:12,112 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 17:00:30,005 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 17:09:16,450 [INFO] ===================================================
+2026-01-27 17:09:16,451 [INFO] Email Monitor Started
+2026-01-27 17:09:16,451 [INFO] Monitoring: 2241591@slu.edu.ph
+2026-01-27 17:09:16,451 [INFO] ===================================================
+2026-01-27 17:09:17,508 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 17:10:30,003 [INFO] file_cache is only supported with oauth2client<4.0.0
+2026-01-27 17:15:30,001 [ERROR] Error checking email: [Errno 2] No such file or directory: 'credentials.json'

@@ -1,6 +1,6 @@
 # Credentials and sensitive files
-credentials.json
-token.json
+config/credentials.json
+config/token.json
 .env
 
 # Python
@@ -9,10 +9,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
 develop-eggs/
-dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -42,16 +39,11 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# PyInstaller
-*.exe
-*.spec
-dist/
+# Build and runtime
 build/
-
-# Logs
-logs/
-*.log
-
+monitor_email/
+monitor_email.exe
+data/logs/
 # Temporary files
 *.tmp
 *.temp

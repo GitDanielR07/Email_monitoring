@@ -313,10 +313,10 @@ def check_email_fast():
 
     print("✅ Email check completed!")
 
-def get_seconds_until_next_10min():
-    """Calculate seconds until next 10-minute mark (00, 10, 20, 30, 40, 50)."""
+def get_seconds_until_next_5min():
+    """Calculate seconds until next 5-minute mark (00, 05, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55)."""
     now = datetime.now()
-    next_minute = (now.minute // 10 + 1) * 10
+    next_minute = (now.minute // 5 + 1) * 5
     next_hour, next_day, next_month, next_year = now.hour, now.day, now.month, now.year
 
     if next_minute == 60:
@@ -344,7 +344,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 def run_standalone():
-    """Run email monitor in standalone mode with 10-minute intervals."""
+    """Run email monitor in standalone mode with 5-minute intervals."""
     # Set up signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -368,7 +368,7 @@ def run_standalone():
             logger.error(f"Error checking email: {e}")
             print(f"❌ Error checking email: {e}")
         
-        wait_sec, next_run = get_seconds_until_next_10min()
+        wait_sec, next_run = get_seconds_until_next_5min()
         print(f"💤 Waiting {int(wait_sec) + 30}s until next check at {next_run.strftime('%H:%M:%S')}...\n")
         time.sleep(wait_sec + 30)
 
