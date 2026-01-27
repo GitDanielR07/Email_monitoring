@@ -203,6 +203,7 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
     
     # Format date more cleanly if available
     date_display = None
+    parsed = None
     if date_str:
         try:
             # Try to parse and format date (remove timezone for cleaner look)
@@ -213,11 +214,14 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
         except:
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
     
+    # Use email's timestamp if available, otherwise use current time
+    embed_timestamp = parsed.isoformat() if parsed else datetime.now(timezone.utc).isoformat()
+    
     embed = {
         "title": truncate_text(subject or "(No Subject)", 256),
         "description": body_truncated,
         "color": 0x00E676,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": embed_timestamp,
         "author": {
             "name": truncate_text(sender_name, 256),
             "icon_url": "https://www.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"
