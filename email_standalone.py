@@ -21,14 +21,33 @@ TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", os.path.join("config", "token.json"))
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
+
+def _remove_token_file():
+    try:
+        os.remove(TOKEN_FILE)
+    except FileNotFoundError:
+        pass
+
 def get_service():
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception:
+            _remove_token_file()
+            creds = None
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                message = str(exc).lower()
+                if "invalid_grant" in message or "expired or revoked" in message:
+                    _remove_token_file()
+                    creds = None
+                else:
+                    raise
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:

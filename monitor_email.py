@@ -17,6 +17,7 @@ import re
 # ===== Load environment variables =====
 load_dotenv()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_EMAIL")
+DISCORD_MENTION_ID = os.getenv("DISCORD_MENTION_ID")
 STUDENT_EMAIL = os.getenv("STUDENT_EMAIL")
 CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", os.path.join("config", "credentials.json"))
 TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", os.path.join("config", "token.json"))
@@ -36,14 +37,34 @@ logger = logging.getLogger(__name__)
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
+
+def _remove_token_file():
+    try:
+        os.remove(TOKEN_FILE)
+    except FileNotFoundError:
+        pass
+
 def get_service():
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception:
+            _remove_token_file()
+            creds = None
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                message = str(exc).lower()
+                if "invalid_grant" in message or "expired or revoked" in message:
+                    logger.warning("Saved Gmail token was revoked or expired; re-authenticating.")
+                    _remove_token_file()
+                    creds = None
+                else:
+                    raise
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
@@ -263,6 +284,10 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
         })
     
     payload = {"embeds": [embed]}
+    
+    # Add mention if Discord mention ID is configured
+    if DISCORD_MENTION_ID:
+        payload["content"] = f"<@{DISCORD_MENTION_ID}> New email received!"
     
     try:
         resp = requests.post(WEBHOOK_URL, json=payload)
