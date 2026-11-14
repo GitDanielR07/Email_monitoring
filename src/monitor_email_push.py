@@ -10,6 +10,7 @@ import json
 import base64
 import logging
 import signal
+import time
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
@@ -23,8 +24,16 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
+# Run from the project root so .env, config/ and logs/ resolve no matter where
+# this was launched from (startup, shortcut, another folder). The built .exe
+# lives in the project root; the script lives in src/.
+if getattr(sys, "frozen", False):
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # ===== Load environment variables =====
-load_dotenv()
+load_dotenv(os.path.join(os.getcwd(), ".env"))
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_EMAIL")
 DISCORD_MENTION_ID = os.getenv("DISCORD_MENTION_ID")
 STUDENT_EMAIL = os.getenv("STUDENT_EMAIL")
@@ -39,11 +48,17 @@ PUBSUB_SUBSCRIPTION = os.getenv("PUBSUB_SUBSCRIPTION", "gmail-notifications-sub"
 # ===== Logging setup =====
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
+# Emoji in log messages crash the default Windows console/file encoding (cp1252).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(log_dir, "monitor_email_push.log")),
+        logging.FileHandler(os.path.join(log_dir, "monitor_email_push.log"), encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
@@ -59,6 +74,17 @@ app = Flask(__name__)
 gmail_service = None
 subscriber = None
 subscription_path = None
+
+# The Gmail client (httplib2) is not thread-safe, and Pub/Sub delivers callbacks
+# on a thread pool. All Gmail access goes through this lock.
+gmail_lock = threading.Lock()
+
+# Gmail history cursor: only messages added after this point are forwarded.
+last_history_id = None
+# Message IDs already forwarded, to avoid duplicates from overlapping notifications.
+processed_ids = set()
+
+WATCH_RENEW_SECONDS = 24 * 60 * 60  # Gmail watches expire after 7 days; renew daily.
 
 
 def _remove_token_file():
@@ -311,12 +337,13 @@ def process_email_notification(message_id):
                 if part.get("filename") and part["filename"] != "":
                     attachments_count += 1
         
-        # Send to Discord
+        # Send to Discord; leave the email unread if delivery fails.
         if send_email_embed(sender, subject, body, date_str, attachments_count):
             logger.info(f"   ✅ Sent to Discord")
         else:
-            logger.error(f"   ❌ Failed to send to Discord")
-        
+            logger.error(f"   ❌ Failed to send to Discord (left unread)")
+            return
+
         # Mark as read
         service.users().messages().modify(
             userId="me",
@@ -326,6 +353,44 @@ def process_email_notification(message_id):
         
     except Exception as e:
         logger.error(f"Error processing email {message_id}: {e}")
+
+
+def fetch_new_inbox_message_ids(notification_history_id):
+    """Return IDs of messages added to INBOX since the last processed history ID.
+
+    Must be called with gmail_lock held.
+    """
+    global last_history_id
+    if last_history_id is None:
+        last_history_id = notification_history_id
+        return []
+
+    service = get_gmail_service()
+    ids = []
+    page_token = None
+    try:
+        while True:
+            resp = service.users().history().list(
+                userId="me",
+                startHistoryId=last_history_id,
+                historyTypes=["messageAdded"],
+                labelId="INBOX",
+                pageToken=page_token,
+            ).execute()
+            for record in resp.get("history", []):
+                for added in record.get("messagesAdded", []):
+                    msg_id = added["message"]["id"]
+                    if msg_id not in ids:
+                        ids.append(msg_id)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                last_history_id = resp.get("historyId", notification_history_id)
+                break
+    except Exception as e:
+        # A 404 means the cursor is too old; resync to the latest point.
+        logger.warning(f"History lookup failed ({e}); resyncing cursor")
+        last_history_id = notification_history_id
+    return ids
 
 
 def handle_pubsub_message(message):
@@ -340,20 +405,14 @@ def handle_pubsub_message(message):
             history_id = data["historyId"]
             
             logger.info(f"📧 Gmail notification received (HistoryId: {history_id})")
-            
-            # Get the list of recent messages
-            service = get_gmail_service()
-            results = service.users().messages().list(
-                userId="me",
-                labelIds=["UNREAD"],
-                maxResults=5
-            ).execute()
-            
-            messages = results.get("messages", [])
-            if messages:
-                for msg in messages:
-                    process_email_notification(msg["id"])
-            
+
+            with gmail_lock:
+                for msg_id in fetch_new_inbox_message_ids(history_id):
+                    if msg_id in processed_ids:
+                        continue
+                    processed_ids.add(msg_id)
+                    process_email_notification(msg_id)
+
             message.ack()
         else:
             logger.warning(f"Unexpected message format: {data}")
@@ -375,18 +434,22 @@ def subscribe_to_notifications():
         
         subscriber = pubsub_v1.SubscriberClient()
         subscription_path = subscriber.subscription_path(GOOGLE_CLOUD_PROJECT, PUBSUB_SUBSCRIPTION)
-        
+
         logger.info(f"📬 Subscribing to: {subscription_path}")
-        
-        streaming_pull_future = subscriber.subscribe(subscription_path, callback=handle_pubsub_message)
-        
+
+        # One notification at a time; the handler serializes Gmail access anyway.
+        flow_control = pubsub_v1.types.FlowControl(max_messages=1)
+        streaming_pull_future = subscriber.subscribe(
+            subscription_path, callback=handle_pubsub_message, flow_control=flow_control
+        )
+
         # Keep the subscriber alive
         try:
             streaming_pull_future.result()
         except KeyboardInterrupt:
             streaming_pull_future.cancel()
             logger.info("Subscriber stopped")
-        
+
         return True
         
     except Exception as e:
@@ -401,8 +464,8 @@ def setup_gmail_watch():
             logger.error("❌ GOOGLE_CLOUD_PROJECT not set in .env file")
             return False
         
-        service = get_gmail_service()
-        
+        global last_history_id
+
         # Create the watch request
         watch_request = {
             "topicName": f"projects/{GOOGLE_CLOUD_PROJECT}/topics/{PUBSUB_TOPIC}"
@@ -410,11 +473,15 @@ def setup_gmail_watch():
         
         logger.info(f"🔔 Setting up Gmail watch on: {watch_request['topicName']}")
         
-        result = service.users().watch(
-            userId="me",
-            body=watch_request
-        ).execute()
-        
+        with gmail_lock:
+            result = get_gmail_service().users().watch(
+                userId="me",
+                body=watch_request
+            ).execute()
+            # Seed the cursor on first start so the existing inbox is not re-sent.
+            if last_history_id is None:
+                last_history_id = result.get("historyId")
+
         logger.info(f"✅ Gmail watch setup successful!")
         logger.info(f"   Expiration: {result.get('expiration', 'Unknown')}")
         
@@ -459,12 +526,21 @@ def main():
     
     logger.info("✅ Gmail watch is active. Listening for incoming emails...")
     
-    # Start Pub/Sub subscription in a separate thread
+    # Start Pub/Sub subscription in a separate thread; restart it if it dies.
     def run_subscriber():
-        subscribe_to_notifications()
-    
-    subscriber_thread = threading.Thread(target=run_subscriber, daemon=True)
-    subscriber_thread.start()
+        while True:
+            subscribe_to_notifications()
+            logger.warning("Subscriber stopped unexpectedly; restarting in 30s")
+            time.sleep(30)
+
+    def renew_watch():
+        while True:
+            time.sleep(WATCH_RENEW_SECONDS)
+            logger.info("🔁 Renewing Gmail watch")
+            setup_gmail_watch()
+
+    threading.Thread(target=run_subscriber, daemon=True).start()
+    threading.Thread(target=renew_watch, daemon=True).start()
     
     # Start Flask app
     logger.info("🌐 Starting health check server on http://localhost:5000")

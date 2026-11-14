@@ -10,10 +10,13 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from dotenv import load_dotenv
 
+# Run from the project root so .env and config/ resolve.
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # ===== Load environment variables =====
 load_dotenv()
-CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json")
-TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", "token.json")
+CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", os.path.join("config", "credentials.json"))
+TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", os.path.join("config", "token.json"))
 
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]

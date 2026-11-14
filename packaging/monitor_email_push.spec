@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
+ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 
 # google-cloud-pubsub / grpc look up their package metadata at runtime.
 datas = []
@@ -10,7 +13,7 @@ hiddenimports = collect_submodules("google.cloud.pubsub_v1") + ["googleapiclient
 
 
 a = Analysis(
-    ['monitor_email_push.py'],
+    [os.path.join(ROOT, 'src', 'monitor_email_push.py')],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -43,5 +46,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\gmail.ico'],
+    icon=[os.path.join(ROOT, 'assets', 'gmail.ico')],
 )

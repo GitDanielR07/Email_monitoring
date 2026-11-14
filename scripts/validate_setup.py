@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Run from the project root so relative paths (config/, src/, .env) resolve.
+os.chdir(Path(__file__).resolve().parent.parent)
+
 # Fix encoding for Windows terminal
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
@@ -59,12 +62,12 @@ def check_files():
     required_files = {
         "config/credentials.json": "Gmail API credentials",
         "requirements.txt": "Python dependencies",
-        "monitor_email_push.py": "Push notification monitor",
+        "src/monitor_email_push.py": "Push notification monitor",
     }
     
     optional_files = {
         "config/token.json": "Gmail OAuth token",
-        "service-account-key.json": "Service account key (for production)",
+        "config/service-account-key.json": "Pub/Sub service account key",
     }
     
     missing = []
@@ -137,7 +140,7 @@ def main():
     if all_good:
         print("✅ ALL CHECKS PASSED!")
         print("\nYou can now run:")
-        print("  python monitor_email_push.py")
+        print("  python src/monitor_email_push.py   (or build the exe: python build.py)")
         return 0
     else:
         print("❌ SETUP INCOMPLETE")

@@ -1,244 +1,103 @@
 # 📧 Email Monitor to Discord
 
-Automated Gmail monitor that forwards allowed emails (e.g., Classroom/Drive/Docs notices) to Discord with clean embeds.
+Forwards new Gmail messages to a Discord channel **the moment they arrive**, using Gmail push notifications (Google Cloud Pub/Sub). Each email is posted as a clean embed and can @mention you so your phone pings.
 
-## ✨ Features
-
-- 🎯 **Smart Filtering** - Only monitors emails from Google Classroom/Docs/Drive/Calendar/Meet and a small allowed list you can edit
-
-- 💎 **Clean Discord Embeds** - Beautiful, human-readable format with:
-  - Gmail icon and sender name
-  - Clean date formatting
-  - Automatic content cleanup (removes footers, disclaimers, metadata)
-  - Attachment indicators
-  - Bright emerald green accent color
-
-- ⚡ **Auto-Processing** - Marks emails as read after forwarding
-- 🔄 **Continuous Monitoring** - Checks every 5 minutes (configurable)
-- 📱 **Full Content** - Reads and forwards complete email body
-
-## 📋 Prerequisites
-
-- Python 3.8+
-- Gmail account
-- Discord webhook URL
-- Google Cloud project with Gmail API enabled
-
-## 🚀 Setup Instructions
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/sora598/Email_monitoring.git
-cd Email_monitoring
-```
-
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Or install manually:
-```bash
-pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client python-dotenv requests beautifulsoup4
-```
-
-### 3. Set Up Gmail API
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select existing)
-3. Enable the **Gmail API**:
-   - Go to "APIs & Services" > "Library"
-   - Search for "Gmail API"
-   - Click "Enable"
-4. Create OAuth 2.0 credentials:
-   - Go to "APIs & Services" > "Credentials"
-   - Click "Create Credentials" > "OAuth client ID"
-   - Choose "Desktop app"
-   - Download the credentials
-5. Save the downloaded file as `config/credentials.json` (create the `config` folder if missing)
-
-### 4. Create Discord Webhook
-
-1. Open your Discord server
-2. Go to Server Settings > Integrations > Webhooks
-3. Click "New Webhook"
-4. Configure webhook (name, channel, icon)
-5. Copy the webhook URL
-
-### 5. Configure Environment Variables
-
-Create a `.env` file in the project directory:
-
-```env
-# Discord Webhook
-DISCORD_WEBHOOK_EMAIL=https://discord.com/api/webhooks/xxx/yyy
-
-# Gmail address to monitor
-STUDENT_EMAIL=your_email@example.com
-
-# Gmail API credentials (optional - defaults shown)
-GMAIL_CREDENTIALS_FILE=config/credentials.json
-GMAIL_TOKEN_FILE=config/token.json
-```
-
-**Example:**
-```env
-DISCORD_WEBHOOK_EMAIL=https://discord.com/api/webhooks/123/abc
-STUDENT_EMAIL=your_email@example.com
-GMAIL_CREDENTIALS_FILE=config/credentials.json
-GMAIL_TOKEN_FILE=config/token.json
-```
-
-### 6. First Run - Authorize Gmail Access
-
-```bash
-python monitor_email.py
-```
-
-On first run:
-1. A browser window will open
-2. Sign in to your Gmail account
-3. Grant the requested permissions
-4. The `config/token.json` file will be created automatically
-
-## 📂 File Structure
+## Project structure
 
 ```
 email_checker/
-├── monitor_email.py           # Main email monitor (run this!)
-├── email_standalone.py        # Alternative CLI runner
-├── email_helper.py            # Email processing helpers
-├── delete_read_emails.py      # Utility to clean read mail
-├── utils.py                   # Utility functions
-├── build.py                   # Build helper (PyInstaller)
-├── monitor_email.spec         # PyInstaller spec file
-├── monitor_email.exe          # Built executable (Windows)
-├── config/
-│   ├── credentials.json       # Gmail API credentials (not committed)
-│   └── token.json            # OAuth token (auto-generated, not committed)
-├── logs/                      # Runtime logs (ignored)
-├── assets/                    # Icons and resources
-├── build/                     # Build artifacts (ignored)
+├── monitor_email_push.exe     # Built app (created by build.py, not committed)
+├── build.py                   # Builds the exe
 ├── requirements.txt
-├── .env
-└── README.md
+├── .env / .env.example        # Your settings (.env is never committed)
+├── src/
+│   ├── monitor_email_push.py  # The monitor (real-time, push-based)
+│   └── legacy/                # Old 5-minute polling monitor and helpers
+├── scripts/
+│   ├── validate_setup.py      # Checks .env, keys and packages
+│   └── delete_read_emails.py  # Optional: bulk-delete read, unstarred mail
+├── packaging/
+│   └── monitor_email_push.spec  # PyInstaller config used by build.py
+├── docs/
+│   ├── SETUP.md               # Google Cloud / Pub/Sub setup, step by step
+│   └── ARCHITECTURE.md        # How the pieces fit together
+├── config/                    # credentials.json, token.json, service-account-key.json (not committed)
+├── assets/                    # App icon
+└── logs/                      # monitor_email_push.log (not committed)
 ```
 
-## 🎮 Usage
+## First-time setup
 
-### Run the Monitor (Python)
+1. **Install dependencies** (inside the project's virtual environment):
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
+2. **Gmail API OAuth credentials** → save as `config/credentials.json`
+   (Google Cloud Console → APIs & Services → Credentials → OAuth client ID → Desktop app).
+3. **Pub/Sub topic, subscription and service account** → follow [docs/SETUP.md](docs/SETUP.md).
+4. **Settings** → copy `.env.example` to `.env` and fill it in.
+5. **Check everything:**
+   ```powershell
+   .venv\Scripts\python.exe scripts\validate_setup.py
+   ```
+6. **First run** opens a browser to authorize Gmail; this creates `config/token.json`.
 
-```bash
-python monitor_email.py
+## Running it
+
+### Option A — the exe (recommended)
+
+```powershell
+.venv\Scripts\python.exe build.py     # build (or rebuild after code changes)
+.\monitor_email_push.exe              # or just double-click it
 ```
 
-### Run the Monitor (Executable)
+The exe has **no window**; it runs in the background. To confirm it's alive:
 
-For Windows, you can run the pre-built executable:
-```bash
-.\monitor_email.exe
+- open http://localhost:5000/health, or
+- read `logs\monitor_email_push.log`.
+
+**Stop it:** Task Manager → `monitor_email_push.exe` → End task, or
+```powershell
+taskkill /IM monitor_email_push.exe /F
 ```
 
-The monitor will:
-- ✅ Check for new emails every 5 minutes
-- ✅ Display which emails are processed or skipped
-- ✅ Send allowed emails to Discord as embeds
-- ✅ Mark forwarded emails as read
-- ✅ Show timestamps in your local timezone
+**Start automatically with Windows:** press `Win + R`, type `shell:startup`, and put a shortcut to `monitor_email_push.exe` in that folder.
 
-### Stop the Monitor
+> Only run **one** copy at a time, and don't run the old `monitor_email.exe` alongside it — both mark emails as read and will compete.
 
-Press `Ctrl + C` to stop the monitor gracefully. You'll see:
-```
-⚠️  Shutdown signal received...
-✋ Stopping email monitor gracefully...
-✅ Email monitor stopped. Goodbye!
+### Option B — straight from Python (for development)
+
+```powershell
+.venv\Scripts\python.exe src\monitor_email_push.py
 ```
 
-## 🔧 Customization
+Logs print to the terminal; `Ctrl + C` stops it.
 
-### Add More Allowed Senders
+## Behaviour
 
-Edit `monitor_email.py` or `email_helper.py`, find the `is_allowed_sender()` function:
+- Forwards only messages that **arrive in the Inbox after the monitor starts** — your existing inbox is never re-sent.
+- Marks an email as read **only after** Discord accepts it; on failure it stays unread.
+- Renews the Gmail watch every 24 hours (Gmail expires watches after 7 days).
+- Restarts the Pub/Sub listener automatically if it drops.
 
-```python
-# Add to google_domains list for Google services
-google_domains = [
-    "classroom.google.com",
-    "docs.google.com",
-    # Add more...
-]
+## Customization
 
-# Add to slu_emails list for specific addresses
-slu_emails = [
-    "info@slu.edu.ph",
-    "support@myvirtuallearning.org",
-    # Add more...
-]
-```
+In `src/monitor_email_push.py`, `send_email_embed()` controls the embed: color (`0x00E676`), icon, and fields.
 
-### Change Check Interval
+## Troubleshooting
 
-In `monitor_email.py`, adjust the helper that computes the next run (default 5 minutes) or the sleep in `run_standalone()`.
+| Problem | Fix |
+|---|---|
+| Nothing posts to Discord | Check `logs\monitor_email_push.log`; make sure only one monitor is running |
+| `GOOGLE_CLOUD_PROJECT not set` / permission errors | Re-check `.env` and [docs/SETUP.md](docs/SETUP.md) step 3–4 |
+| Gmail auth fails | Delete `config\token.json` and run again to re-authorize |
+| Exe starts then disappears | Run the Python version (Option B) to see the error |
 
-### Customize Embed Appearance
+## Security
 
-Edit `send_email_embed()` function to change:
-- **Color**: Change `0x00E676` (emerald green) to any hex color
-- **Icon**: Change `icon_url` to different image
-- **Fields**: Add/remove metadata fields
+Never commit `.env`, `config/` (OAuth credentials, token, service-account key), or your Discord webhook URL. `.gitignore` already excludes them.
 
-## 📝 Helper Scripts
+## License
 
-- `email_helper.py` - Email processing helpers
-- `delete_read_emails.py` - Delete read emails (use with caution)
-- `build.py` - Rebuilds `monitor_email.exe` via PyInstaller
-
-## 🔒 Security Notes
-
-- **Never commit** `credentials.json`, `token.json`, or `.env` files
-- Keep your Discord webhook URL private
-- The `.gitignore` file is configured to exclude sensitive files
-- Use environment variables for all sensitive data
-
-## 🐛 Troubleshooting
-
-### "No module named 'requests'" error
-```bash
-pip install -r requirements.txt
-```
-
-### Gmail authentication fails
-1. Delete `token.json`
-2. Run the script again to re-authenticate
-3. Make sure Gmail API is enabled in Google Cloud Console
-
-### Emails not being forwarded
-- Check that the sender is in the allowed list
-- Verify the Discord webhook URL is correct
-- Check console output for "SKIPPED" messages
-
-### Rate limit errors
-- Google has API quotas - if you hit them, wait and try again
-- Default check interval (10 minutes) should be safe
-
-## 📄 License
-
-MIT License - Feel free to use and modify!
-
-## 🤝 Contributing
-
-Contributions welcome! Feel free to:
-- Report bugs
-- Suggest features
-- Submit pull requests
-
-## 👤 Author
-
-Created for personal email-to-Discord monitoring.
-
-## 📞 Support
-
-For issues or questions, please open an issue on GitHub.
+MIT

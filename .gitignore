@@ -40,11 +40,8 @@ Thumbs.db
 
 # Build and runtime
 build/
-monitor_email/
-monitor_email.exe
-data/
+*.exe
 logs/
-assets/
 # Temporary files
 *.tmp
 *.temp

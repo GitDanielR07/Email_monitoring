@@ -1,211 +1,72 @@
-# Gmail Push Notifications Setup Guide
+# Gmail Push Notifications — Google Cloud Setup
 
-This guide will help you set up real-time Gmail push notifications for instant email alerts to Discord.
+One-time setup so Gmail can notify the monitor instantly. Do everything in the **same Google Cloud project** that owns your Gmail OAuth credentials (the `project_id` inside `config/credentials.json`).
 
-## Prerequisites
-
-- Google Cloud Project (already created)
-- Gmail API already enabled
-- Service account credentials (optional, or use existing OAuth credentials)
-- Python packages installed: `google-cloud-pubsub`, `flask`
+Cost: the Gmail API is free, and Pub/Sub's first 10 GiB/month is free — Gmail notifications are tiny, so normal use stays at $0.
 
 ---
 
-## Step 1: Create Google Cloud Pub/Sub Topic
+## 1. Enable the Pub/Sub API
 
-### 1.1 Go to Google Cloud Console
-- Navigate to: https://console.cloud.google.com
-- Select your project from the dropdown
+Console → **APIs & Services → Library** → search **Cloud Pub/Sub API** → **Enable**.
+(If the Pub/Sub → Topics page loads without an "Enable" button, it's already on.)
 
-### 1.2 Enable Pub/Sub API
-- Go to **APIs & Services** > **Library**
-- Search for **"Cloud Pub/Sub API"**
-- Click it and press **Enable** button
+## 2. Create the topic and subscription
 
-### 1.3 Create a Pub/Sub Topic
-- Go to **Pub/Sub** > **Topics**
-- Click **Create Topic**
-- Topic ID: `gmail-notifications`
-- Click **Create Topic**
+1. **Pub/Sub → Topics → Create topic**
+2. Topic ID: `gmail-notifications`, keep **Add a default subscription** ticked → **Create**
+3. In **Subscriptions**, make sure one named `gmail-notifications-sub` exists with delivery type **Pull**. Create it if the default got a different name.
 
-### 1.4 Create a Subscription
-- Open the topic you created (`gmail-notifications`)
-- Click **Create Subscription**
-- Subscription ID: `gmail-notifications-sub`
-- Delivery Type: **Pull** (keep default)
-- Click **Create Subscription**
+## 3. Let Gmail publish to the topic
 
----
+1. Open the `gmail-notifications` topic → **Permissions** panel → **Add principal**
+2. Principal: `gmail-api-push@system.gserviceaccount.com`
+3. Role: **Pub/Sub Publisher** → **Save**
 
-## Step 2: Get Your Google Cloud Project ID
+## 4. Create a service account key (lets the monitor read the subscription)
 
-1. Go to **Settings** (gear icon in top-right) > **Project Settings**
-2. Find and copy your **Project ID** (looks like: `my-project-12345`)
-3. Save this - you'll need it soon
+1. **IAM & Admin → Service Accounts → Create service account**, name e.g. `email-monitor`
+2. Role: **Pub/Sub Subscriber** → **Done**
+3. Open the account → **Keys → Add key → Create new key → JSON**
+4. Save the downloaded file as `config/service-account-key.json`
 
----
-
-## Step 3: Create a Service Account (Optional but Recommended)
-
-### Why? Service accounts allow Pub/Sub to push notifications without user authentication.
-
-1. Go to **APIs & Services** > **Credentials**
-2. Click **Create Credentials** > **Service Account**
-3. Fill in:
-   - Service account name: `gmail-push-notifications`
-   - Service account ID: (auto-fill)
-   - Click **Create and Continue**
-4. Grant roles:
-   - Click **Continue** (roles are optional for local setup)
-   - Click **Done**
-
-### 4.1 Create a Key
-1. Click on the service account you just created
-2. Go to **Keys** tab
-3. Click **Add Key** > **Create new key**
-4. Key type: **JSON**
-5. Click **Create**
-6. A JSON file downloads automatically
-7. Save it to your project folder as: `service-account-key.json`
-
----
-
-## Step 4: Configure Your .env File
-
-Add these variables to your `.env` file:
+## 5. Fill in `.env`
 
 ```env
-# Existing variables (keep these)
-DISCORD_WEBHOOK_EMAIL=your_discord_webhook_url
-DISCORD_MENTION_ID=your_discord_id_for_mentions
-STUDENT_EMAIL=your_email@gmail.com
-GMAIL_CREDENTIALS_FILE=config/credentials.json
-GMAIL_TOKEN_FILE=config/token.json
-
-# NEW: Push Notification Variables
-GOOGLE_CLOUD_PROJECT=your-project-id-12345
+GOOGLE_CLOUD_PROJECT=your-project-id
 PUBSUB_TOPIC=gmail-notifications
 PUBSUB_SUBSCRIPTION=gmail-notifications-sub
-GOOGLE_APPLICATION_CREDENTIALS=./service-account-key.json
+GOOGLE_APPLICATION_CREDENTIALS=config/service-account-key.json
+DISCORD_MENTION_ID=your_discord_user_id   # optional, for @mentions
 ```
 
-Replace:
-- `your-project-id-12345` with your actual Project ID from Step 2
+To find your Discord user ID: Discord settings → Advanced → enable **Developer Mode**, then right-click your name → **Copy User ID**.
 
----
+## 6. Verify and run
 
-## Step 5: Allow Gmail API to Use Pub/Sub
-
-The Gmail API needs permission to publish to your Pub/Sub topic.
-
-### 5.1 Get Your Gmail API Service Account Email
-1. Go to **APIs & Services** > **Credentials**
-2. Find your Gmail API credentials (should be "Desktop application" type)
-3. If you don't see it, you may use your personal Google account instead
-
-### 5.2 Grant Permissions to Pub/Sub Topic
-1. Go to **Pub/Sub** > **Topics** > **gmail-notifications**
-2. Click **Permissions** (or **Show Info** > **Permissions**)
-3. Click **Add Principal** or **Grant Access**
-4. Add:
-   - **Principal:** `gmail-api-push@system.gserviceaccount.com` (Gmail's system account)
-   - **Role:** `Pub/Sub Publisher`
-5. Click **Save**
-
-> Note: Gmail uses a system service account to push notifications
-
----
-
-## Step 6: Test the Setup
-
-### 6.1 Run the Push Notification Monitor
-```bash
-cd D:\VScode\email_checker
-python monitor_email_push.py
+```powershell
+.venv\Scripts\python.exe scripts\validate_setup.py
+.venv\Scripts\python.exe src\monitor_email_push.py
 ```
 
-You should see:
+Expected output:
+
 ```
-======================================================================
-Gmail Push Notification Monitor
-======================================================================
-📧 Email: your_email@gmail.com
-🔔 Discord Webhook: Configured
-☁️  Google Cloud Project: your-project-id-12345
-📬 Pub/Sub Topic: gmail-notifications
-======================================================================
-🔔 Setting up Gmail watch on: projects/your-project-id/topics/gmail-notifications
 ✅ Gmail watch setup successful!
-📬 Subscribing to: projects/your-project-id/subscriptions/gmail-notifications-sub
 ✅ Gmail watch is active. Listening for incoming emails...
+📬 Subscribing to: projects/<project>/subscriptions/gmail-notifications-sub
 ```
 
-### 6.2 Test with an Email
-1. Send an email to your Gmail account from another email address
-2. Check your Discord channel - you should get an instant notification! ⚡
+Send yourself an email from another account — it should appear in Discord within a couple of seconds. Then build the exe for everyday use (see the [README](../README.md#running-it)).
 
 ---
 
-## Step 7: Troubleshooting
+## Troubleshooting
 
-### Problem: "GOOGLE_CLOUD_PROJECT not set"
-- **Solution:** Make sure you added `GOOGLE_CLOUD_PROJECT` to your `.env` file with the correct Project ID
-
-### Problem: "Permission denied" errors
-- **Solution:** 
-  1. Check that Gmail API service account has access to Pub/Sub topic
-  2. Verify your Project ID is correct
-  3. Re-check Pub/Sub topic permissions
-
-### Problem: No emails arriving
-- **Solution:**
-  1. Check your Discord webhook URL is correct
-  2. Verify `monitor_email_push.py` is running
-  3. Check logs in `logs/monitor_email_push.log`
-  4. Send test email to your account
-
-### Problem: "google-cloud-pubsub not found"
-- **Solution:** Run:
-  ```bash
-  pip install google-cloud-pubsub flask
-  ```
-
----
-
-## Step 8: Production Setup
-
-For production use (not local testing):
-
-1. **Use a VM or Server:** Deploy on a cloud VM (Google Cloud, AWS, etc.) instead of your local machine
-2. **Enable Pub/Sub Subscription Manager:** Set up a background process to keep the subscriber running
-3. **Add Error Handling:** The code already includes logging; configure log rotation
-4. **Security:** Use secrets manager instead of plain `.env` files
-5. **Monitoring:** Set up alerts for failed notifications
-
----
-
-## FAQ
-
-**Q: Will this drain my battery/disk space?**
-A: No, push notifications are very efficient. They only trigger when emails arrive.
-
-**Q: Can I switch back to 10-minute checks?**
-A: Yes, just run `monitor_email.py` instead of `monitor_email_push.py`
-
-**Q: What's the difference between the two monitors?**
-- `monitor_email.py` - Checks every 10 minutes (polling)
-- `monitor_email_push.py` - Real-time via Pub/Sub (pushing)
-
-**Q: Do I need to keep the Flask server running?**
-A: Yes, it provides a health check endpoint. You can comment it out if not needed.
-
----
-
-## Next Steps
-
-1. Complete all steps above
-2. Run: `python monitor_email_push.py`
-3. Test by sending an email
-4. Keep the terminal running or set up as a Windows service
-
-Need help? Check the logs: `logs/monitor_email_push.log`
+| Error / symptom | Cause and fix |
+|---|---|
+| `GOOGLE_CLOUD_PROJECT not set` | Missing from `.env` |
+| `Failed to set up Gmail watch` … permission | Step 3 not done (Gmail can't publish to the topic) |
+| `Failed to subscribe` … `403` / credentials | Step 4: key missing, wrong path, or account lacks **Pub/Sub Subscriber** |
+| Watch works but nothing posts | Another monitor (e.g. old `monitor_email.exe`) is marking emails read first — close it |
+| "Domain restricted sharing" when adding the Gmail principal | An org policy blocks external principals; the project owner must allow it for this project |
