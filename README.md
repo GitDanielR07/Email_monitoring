@@ -76,8 +76,11 @@ Logs print to the terminal; `Ctrl + C` stops it.
 
 ## Behaviour
 
-- Forwards only messages that **arrive in the Inbox after the monitor starts** — your existing inbox is never re-sent.
-- Marks an email as read **only after** Discord accepts it; on failure it stays unread.
+- Forwards every new Inbox email as it arrives (green embed).
+- **Catches up after downtime:** it saves its place in `config/monitor_state.json`. On the next start, emails that arrived while it was off are sent oldest-first as **amber embeds labelled "Missed while offline"**. These are sent even if you've already read them.
+- Every embed shows when Gmail **received** the email, in each viewer's own timezone (e.g. "November 15, 2026 5:40 AM (2 hours ago)").
+- The very first run starts from "now"; it does not dump your existing inbox. Delete `config/monitor_state.json` to reset to that.
+- Marks an email as read **only after** Discord accepts it; failed sends are retried on the next sync.
 - Renews the Gmail watch every 24 hours (Gmail expires watches after 7 days).
 - Restarts the Pub/Sub listener automatically if it drops.
 

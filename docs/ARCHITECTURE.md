@@ -24,7 +24,8 @@
 | **Gmail watch** (`users.watch`) | Tells Gmail to publish a notification to the topic whenever the mailbox changes. Expires after 7 days; the monitor renews it every 24 h. |
 | **Pub/Sub topic + subscription** | Message broker between Gmail and your PC. Gmail publishes via `gmail-api-push@system.gserviceaccount.com`; the monitor pulls using the service account key. |
 | **History cursor** | A notification only says "something changed" plus a `historyId`. The monitor keeps the last `historyId` it handled and asks Gmail what was added to the INBOX since then, so only genuinely new mail is forwarded. |
-| **Discord webhook** | Receives the formatted embed. |
+| **Saved state** (`config/monitor_state.json`) | Persists the history cursor, recently sent IDs and failed sends. On startup the monitor syncs from the saved cursor and posts anything that arrived while it was offline, labelled as missed. If Gmail no longer keeps history that old (about a week), it falls back to an Inbox search by date since the last sync. |
+| **Discord webhook** | Receives the formatted embed (green = live, amber = missed while offline). Rate-limit responses (429) are retried. |
 | **Health endpoint** | Flask on `http://localhost:5000/health`, handy for checking the windowless exe is alive. |
 
 ## Concurrency
@@ -46,4 +47,5 @@ The Gmail client (httplib2) is not thread-safe, while Pub/Sub delivers callbacks
 - `config/credentials.json` — Gmail OAuth client
 - `config/token.json` — Gmail OAuth token (created on first run)
 - `config/service-account-key.json` — Pub/Sub subscriber key
+- `config/monitor_state.json` — saved cursor for offline catch-up (delete to reset)
 - `logs/monitor_email_push.log` — runtime log
