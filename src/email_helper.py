@@ -29,12 +29,13 @@ TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", "token.json")
 
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+
+
 def _remove_token_file():
     try:
         os.remove(TOKEN_FILE)
     except FileNotFoundError:
         pass
-
 
 def get_service():
     creds = None
@@ -44,12 +45,6 @@ def get_service():
         except Exception:
             _remove_token_file()
             creds = None
-
-    # If we have credentials but no refresh token, force re-auth so we get one.
-    if creds and not getattr(creds, "refresh_token", None):
-        _remove_token_file()
-        creds = None
-
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -63,58 +58,11 @@ def get_service():
                     raise
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            # Request offline access and force consent to obtain a refresh token reliably
-            creds = flow.run_local_server(port=0, authorization_url_params={
-                "access_type": "offline",
-                "prompt": "consent",
-            })
+            creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
     return build("gmail", "v1", credentials=creds)
 
-def is_allowed_sender(sender, subject):
-    """Check if email is from allowed sources."""
-    sender_lower = sender.lower()
-    subject_lower = subject.lower()
-    
-    # Google services
-    google_domains = [
-        "classroom.google.com",
-        "docs.google.com",
-        "drive.google.com",
-        "calendar.google.com",
-        "meet.google.com",
-        "@google.com",
-        "no-reply@accounts.google.com",
-        "googleclassroom-noreply@google.com"
-    ]
-    
-    # SLU specific emails
-    slu_emails = [
-        "info@slu.edu.ph",
-        "support@myvirtuallearning.org"
-    ]
-    
-    # Check Google services
-    for domain in google_domains:
-        if domain in sender_lower:
-            return True
-    
-    # Check SLU emails
-    for email in slu_emails:
-        if email in sender_lower:
-            return True
-    
-    # Check if it's a Google Classroom notification in subject
-    if "google classroom" in subject_lower or "classroom" in subject_lower:
-        return True
-    
-    # Check for Google Docs/Drive sharing invitations
-    if any(keyword in subject_lower for keyword in ["shared", "invited you", "google docs", "google drive"]):
-        if any(domain in sender_lower for domain in ["@google.com", "docs.google.com", "drive.google.com"]):
-            return True
-    
-    return False
 
 def get_email_body(payload):
     """Extract email body from message payload."""
@@ -243,9 +191,7 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
                     parsed = parsed.replace(tzinfo=timezone.utc)
                 parsed_ph = parsed.astimezone(ph_tz)
                 date_display = parsed_ph.strftime("%B %d, %Y at %I:%M %p")
-                print(f"   📅 Parsed date: {date_str} -> {date_display} (PH time)")
         except Exception as e:
-            print(f"   ⚠️ Failed to parse date '{date_str}': {e}")
             date_display = date_str.split(' (')[0] if '(' in date_str else date_str
     
     # Use the email's actual timestamp for the embed (not current time)
@@ -325,32 +271,28 @@ def check_email_fast():
         print(f"   From: {sender}")
         print(f"   Subject: {subject}")
 
-        if is_allowed_sender(sender, subject):
-            full_msg_data = service.users().messages().get(
-                userId="me",
-                id=msg["id"],
-                format="full"
-            ).execute()
+        full_msg_data = service.users().messages().get(
+            userId="me",
+            id=msg["id"],
+            format="full"
+        ).execute()
 
-            body = get_email_body(full_msg_data["payload"])
+        body = get_email_body(full_msg_data["payload"])
 
-            attachments_count = 0
-            if "parts" in full_msg_data["payload"]:
-                for part in full_msg_data["payload"]["parts"]:
-                    if part.get("filename") and part["filename"] != "":
-                        attachments_count += 1
+        attachments_count = 0
+        if "parts" in full_msg_data["payload"]:
+            for part in full_msg_data["payload"]["parts"]:
+                if part.get("filename") and part["filename"] != "":
+                    attachments_count += 1
 
-            send_email_embed(sender, subject, body, date_str, attachments_count)
+        send_email_embed(sender, subject, body, date_str, attachments_count)
 
-            service.users().messages().modify(
-                userId="me",
-                id=msg["id"],
-                body={"removeLabelIds": ["UNREAD"]}
-            ).execute()
-        else:
-            print("   ⏭️ SKIPPED - Not from allowed sources")
-
-    print("✅ Email check completed!")
+        service.users().messages().modify(
+            userId="me",
+            id=msg["id"],
+            body={"removeLabelIds": ["UNREAD"]}
+        ).execute()
+        print("   ✅ SENT - Email forwarded to Discord")
 
 def get_seconds_until_next_10min():
     """Calculate seconds until next 10-minute mark (00, 10, 20, 30, 40, 50)."""
