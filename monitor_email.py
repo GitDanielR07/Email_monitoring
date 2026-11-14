@@ -220,6 +220,10 @@ def truncate_text(text, max_length=1024):
 
 def send_email_embed(sender, subject, body, date_str, attachments_count=0):
     """Send email as Discord embed."""
+    if not WEBHOOK_URL:
+        logger.error("Discord webhook is not configured; email was not sent.")
+        return False
+
     # Truncate body for Discord limits (already cleaned)
     body_truncated = truncate_text(body, 2000) if body else "*(Empty message)*"
     
@@ -290,18 +294,28 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
         payload["content"] = f"<@{DISCORD_MENTION_ID}> New email received!"
     
     try:
-        resp = requests.post(WEBHOOK_URL, json=payload)
-        return resp.status_code in (200, 204)
-    except Exception as e:
-        print(f"❌ Failed to send Discord embed: {e}")
-        return False
+        resp = requests.post(WEBHOOK_URL, json=payload, timeout=15)
+        if resp.status_code in (200, 204):
+            logger.info("Discord webhook delivered (HTTP %s): %s", resp.status_code, subject)
+            return True
+
+        logger.error(
+            "Discord webhook rejected email (HTTP %s): %s; response: %s",
+            resp.status_code,
+            subject,
+            resp.text[:500],
+        )
+    except requests.RequestException as exc:
+        # Avoid logging the exception text, which may contain the secret webhook URL.
+        logger.error("Discord webhook request failed (%s): %s", type(exc).__name__, subject)
+
+    return False
 
 def check_email_fast():
     service = get_service()
 
-    query = 'is:unread'
     results = service.users().messages().list(
-        userId="me", labelIds=["INBOX"], q=query, maxResults=10
+        userId="me", labelIds=["INBOX"], maxResults=10
     ).execute()
 
     messages = results.get("messages", [])
@@ -310,16 +324,22 @@ def check_email_fast():
         return
 
     for msg in messages:
-        # Fetch full message with body
+        # Inspect only the latest 10 inbox messages; process unread ones only.
         msg_data = service.users().messages().get(
             userId="me",
             id=msg["id"],
-            format="full"
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Date"]
         ).execute()
+
+        labels = msg_data.get("labelIds", [])
+        if "UNREAD" not in labels:
+            print("\n📧 Checking email:")
+            print("   ⏭️ SKIPPED - Already read")
+            continue
 
         headers = msg_data["payload"]["headers"]
         sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown Sender")
-        to_email = next((h["value"] for h in headers if h["name"] == "To"), "")
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
         date_str = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
@@ -331,18 +351,26 @@ def check_email_fast():
         # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
             logger.info(f"Processing allowed email: {subject}")
+            full_msg_data = service.users().messages().get(
+                userId="me",
+                id=msg["id"],
+                format="full"
+            ).execute()
+
             # Extract email body
-            body = get_email_body(msg_data["payload"])
+            body = get_email_body(full_msg_data["payload"])
             
             # Count attachments
             attachments_count = 0
-            if "parts" in msg_data["payload"]:
-                for part in msg_data["payload"]["parts"]:
+            if "parts" in full_msg_data["payload"]:
+                for part in full_msg_data["payload"]["parts"]:
                     if part.get("filename") and part["filename"] != "":
                         attachments_count += 1
             
-            # Send via Discord embed
-            send_email_embed(sender, subject, body, date_str, attachments_count)
+            # Keep the message unread if delivery fails so the next poll retries it.
+            if not send_email_embed(sender, subject, body, date_str, attachments_count):
+                logger.warning("Leaving email unread for retry: %s", subject)
+                continue
 
             # Mark as read
             service.users().messages().modify(
@@ -350,6 +378,7 @@ def check_email_fast():
                 id=msg["id"],
                 body={"removeLabelIds": ["UNREAD"]}
             ).execute()
+            logger.info("Marked as read after webhook delivery: %s", subject)
         else:
             logger.debug(f"Skipped: {subject}")
 

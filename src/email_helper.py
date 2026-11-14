@@ -29,17 +29,45 @@ TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", "token.json")
 
 # ===== Gmail API setup =====
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+def _remove_token_file():
+    try:
+        os.remove(TOKEN_FILE)
+    except FileNotFoundError:
+        pass
+
 
 def get_service():
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception:
+            _remove_token_file()
+            creds = None
+
+    # If we have credentials but no refresh token, force re-auth so we get one.
+    if creds and not getattr(creds, "refresh_token", None):
+        _remove_token_file()
+        creds = None
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                message = str(exc).lower()
+                if "invalid_grant" in message or "expired or revoked" in message:
+                    _remove_token_file()
+                    creds = None
+                else:
+                    raise
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+            # Request offline access and force consent to obtain a refresh token reliably
+            creds = flow.run_local_server(port=0, authorization_url_params={
+                "access_type": "offline",
+                "prompt": "consent",
+            })
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
     return build("gmail", "v1", credentials=creds)
@@ -104,12 +132,10 @@ def get_email_body(payload):
                     soup = BeautifulSoup(html, "html.parser")
                     body = soup.get_text(separator="\n", strip=True)
             elif "parts" in part:
-                # Recursively check nested parts
                 nested_body = get_email_body(part)
                 if nested_body and not body:
                     body = nested_body
     else:
-        # Single part message
         if "body" in payload and "data" in payload["body"]:
             data = payload["body"]["data"]
             decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
@@ -125,12 +151,11 @@ def clean_email_body(body):
     """Remove unnecessary text from email body."""
     if not body:
         return body
-    
+
     # Split into lines for processing
     lines = body.split('\n')
     cleaned_lines = []
     skip_rest = False
-    skip_count = 0
     
     for line in lines:
         line_lower = line.lower().strip()
@@ -268,9 +293,8 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
 def check_email_fast():
     service = get_service()
 
-    query = 'is:unread'
     results = service.users().messages().list(
-        userId="me", labelIds=["INBOX"], q=query, maxResults=10
+        userId="me", labelIds=["INBOX"], maxResults=10
     ).execute()
 
     messages = results.get("messages", [])
@@ -279,42 +303,45 @@ def check_email_fast():
         return
 
     for msg in messages:
-        # Fetch full message with body
         msg_data = service.users().messages().get(
             userId="me",
             id=msg["id"],
-            format="full"
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Date"]
         ).execute()
+
+        labels = msg_data.get("labelIds", [])
+        if "UNREAD" not in labels:
+            print("\n📧 Checking email:")
+            print("   ⏭️ SKIPPED - Already read")
+            continue
 
         headers = msg_data["payload"]["headers"]
         sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown Sender")
-        to_email = next((h["value"] for h in headers if h["name"] == "To"), "")
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
         date_str = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
-        # Debug: Show all emails being checked
         print(f"\n📧 Checking email:")
         print(f"   From: {sender}")
         print(f"   Subject: {subject}")
-        print(f"   Raw Date Header: {date_str}")
 
-        # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
-            print("   ✅ ALLOWED - Processing email...")
-            # Extract email body
-            body = get_email_body(msg_data["payload"])
-            
-            # Count attachments
+            full_msg_data = service.users().messages().get(
+                userId="me",
+                id=msg["id"],
+                format="full"
+            ).execute()
+
+            body = get_email_body(full_msg_data["payload"])
+
             attachments_count = 0
-            if "parts" in msg_data["payload"]:
-                for part in msg_data["payload"]["parts"]:
+            if "parts" in full_msg_data["payload"]:
+                for part in full_msg_data["payload"]["parts"]:
                     if part.get("filename") and part["filename"] != "":
                         attachments_count += 1
-            
-            # Send via Discord embed
+
             send_email_embed(sender, subject, body, date_str, attachments_count)
 
-            # Mark as read
             service.users().messages().modify(
                 userId="me",
                 id=msg["id"],

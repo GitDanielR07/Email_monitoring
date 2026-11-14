@@ -123,12 +123,10 @@ def get_email_body(payload):
                     soup = BeautifulSoup(html, "html.parser")
                     body = soup.get_text(separator="\n", strip=True)
             elif "parts" in part:
-                # Recursively check nested parts
                 nested_body = get_email_body(part)
                 if nested_body and not body:
                     body = nested_body
     else:
-        # Single part message
         if "body" in payload and "data" in payload["body"]:
             data = payload["body"]["data"]
             decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
@@ -144,12 +142,11 @@ def clean_email_body(body):
     """Remove unnecessary text from email body."""
     if not body:
         return body
-    
+
     # Split into lines for processing
     lines = body.split('\n')
     cleaned_lines = []
     skip_rest = False
-    skip_count = 0
     
     for line in lines:
         line_lower = line.lower().strip()
@@ -285,9 +282,8 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0):
 def check_email_fast():
     service = get_service()
 
-    query = 'is:unread'
     results = service.users().messages().list(
-        userId="me", labelIds=["INBOX"], q=query, maxResults=10
+        userId="me", labelIds=["INBOX"], maxResults=10
     ).execute()
 
     messages = results.get("messages", [])
@@ -296,42 +292,52 @@ def check_email_fast():
         return
 
     for msg in messages:
-        # Fetch full message with body
         msg_data = service.users().messages().get(
             userId="me",
             id=msg["id"],
-            format="full"
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Date"]
         ).execute()
+
+        labels = msg_data.get("labelIds", [])
+        if "UNREAD" not in labels:
+            print("\n📧 Checking email:")
+            print("   ⏭️ SKIPPED - Already read")
+            continue
 
         headers = msg_data["payload"]["headers"]
         sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown Sender")
-        to_email = next((h["value"] for h in headers if h["name"] == "To"), "")
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
         date_str = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
-        # Log email being checked
+        print(f"\n📧 Checking email:")
+        print(f"   From: {sender}")
+        print(f"   Subject: {subject}")
 
-        # Check if email is from allowed sources
         if is_allowed_sender(sender, subject):
-            # Extract email body
-            body = get_email_body(msg_data["payload"])
-            
-            # Count attachments
+            full_msg_data = service.users().messages().get(
+                userId="me",
+                id=msg["id"],
+                format="full"
+            ).execute()
+
+            body = get_email_body(full_msg_data["payload"])
+
             attachments_count = 0
-            if "parts" in msg_data["payload"]:
-                for part in msg_data["payload"]["parts"]:
+            if "parts" in full_msg_data["payload"]:
+                for part in full_msg_data["payload"]["parts"]:
                     if part.get("filename") and part["filename"] != "":
                         attachments_count += 1
-            
-            # Send via Discord embed
+
             send_email_embed(sender, subject, body, date_str, attachments_count)
 
-            # Mark as read
             service.users().messages().modify(
                 userId="me",
                 id=msg["id"],
                 body={"removeLabelIds": ["UNREAD"]}
             ).execute()
+        else:
+            print("   ⏭️ SKIPPED - Not from allowed sources")
 
 def get_seconds_until_next_10min():
     """Calculate seconds until next 10-minute mark (00, 10, 20, 30, 40, 50)."""
