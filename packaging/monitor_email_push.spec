@@ -1,12 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
+# google-cloud-pubsub / grpc look up their package metadata at runtime.
+datas = []
+for pkg in ("google-cloud-pubsub", "google-api-core", "grpcio", "google-api-python-client"):
+    datas += copy_metadata(pkg)
+
+hiddenimports = collect_submodules("google.cloud.pubsub_v1") + ["googleapiclient.discovery_cache"]
 
 
 a = Analysis(
-    ['monitor_email.py'],
+    ['monitor_email_push.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='monitor_email',
+    name='monitor_email_push',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
