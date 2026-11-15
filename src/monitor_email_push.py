@@ -9,6 +9,7 @@ import sys
 import json
 import base64
 import logging
+from logging.handlers import RotatingFileHandler
 import signal
 import time
 from datetime import datetime, timezone, timedelta
@@ -22,7 +23,7 @@ from google.cloud import pubsub_v1
 from flask import Flask, request
 import threading
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 import re
 
 # Run from the project root so .env, config/ and logs/ resolve no matter where
@@ -59,7 +60,12 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(log_dir, "monitor_email_push.log"), encoding="utf-8"),
+        # At 10 MB the log is renamed to .log.1 (replacing the previous .log.1)
+        # and a fresh file starts, so logs never take more than ~20 MB.
+        RotatingFileHandler(
+            os.path.join(log_dir, "monitor_email_push.log"),
+            maxBytes=10 * 1024 * 1024, backupCount=1, encoding="utf-8",
+        ),
         logging.StreamHandler()
     ]
 )
@@ -180,36 +186,292 @@ def get_gmail_service():
     return gmail_service
 
 
-def get_email_body(payload):
-    """Extract email body from message payload."""
-    body = ""
-    
-    if "parts" in payload:
-        for part in payload["parts"]:
-            if part["mimeType"] == "text/plain":
-                if "data" in part["body"]:
-                    body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
-                    break
-            elif part["mimeType"] == "text/html" and not body:
-                if "data" in part["body"]:
-                    html = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
-                    soup = BeautifulSoup(html, "html.parser")
-                    body = soup.get_text(separator="\n", strip=True)
-            elif "parts" in part:
-                nested_body = get_email_body(part)
-                if nested_body and not body:
-                    body = nested_body
-    else:
-        if "body" in payload and "data" in payload["body"]:
-            data = payload["body"]["data"]
-            decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
-            if payload["mimeType"] == "text/html":
-                soup = BeautifulSoup(decoded, "html.parser")
-                body = soup.get_text(separator="\n", strip=True)
+# Invisible characters marketing emails use to pad the inbox preview text.
+# Discord renders them as huge blocks of empty space.
+_INVISIBLE_CHARS = re.compile(
+    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e"
+    "\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufeff\uffa0]"
+)
+_ODD_SPACES = re.compile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\t]")
+
+
+# Long tracking links (optionally wrapped in parentheses / angle brackets) add noise.
+_LONG_URL = re.compile(r"[(<\[]?\s*https?://\S{50,}\s*[)>\]]?")
+
+
+def _normalize_text(text):
+    """Strip invisible padding and tracking links, normalize spaces, collapse blank lines."""
+    text = _INVISIBLE_CHARS.sub("", text)
+    text = _ODD_SPACES.sub(" ", text)
+    text = _LONG_URL.sub("", text)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r" {2,}", " ", line).strip()
+        if re.fullmatch(r"[()\[\]<>|*•·\-–—_=.]*", line):
+            line = ""  # leftover brackets/separators from removed links
+        lines.append(line)
+    text = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _decode_part(part):
+    data = part.get("body", {}).get("data")
+    if not data:
+        return ""
+    return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+
+
+def _collect_parts(payload, found):
+    """Walk the MIME tree and keep the first text/plain and text/html bodies."""
+    mime = payload.get("mimeType", "")
+    if mime == "text/plain" and "plain" not in found and not payload.get("filename"):
+        found["plain"] = _decode_part(payload)
+    elif mime == "text/html" and "html" not in found and not payload.get("filename"):
+        found["html"] = _decode_part(payload)
+    for part in payload.get("parts", []):
+        _collect_parts(part, found)
+
+
+MAX_LINK_URL = 1000  # absurdly long URLs are dropped, the link text is kept
+
+_BLOCK_TAGS = ["p", "div", "tr", "table", "li", "ul", "ol", "h1", "h2", "h3",
+               "h4", "h5", "h6", "blockquote", "section", "article", "header",
+               "footer", "center", "hr"]
+
+
+_PRESERVE_WS = re.compile(r"white-space\s*:\s*(pre|pre-wrap|pre-line|break-spaces)", re.I)
+
+
+def _preserves_newlines(node):
+    for parent in node.parents:
+        if parent.name in ("pre", "textarea") or _PRESERVE_WS.search(parent.get("style") or ""):
+            return True
+    return False
+
+
+_BOLD_TAGS = {"b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"}
+_BOLD_STYLE = re.compile(r"font-weight\s*:\s*(bold|bolder|[6-9]00)\b", re.I)
+BOLD_OPEN, BOLD_CLOSE = "\x01", "\x02"  # placeholders, turned into ** later
+MAX_BOLD_SHARE = 0.6  # if more of the email than this is bold, bold means nothing
+
+
+def _is_bold(tag):
+    return tag.name in _BOLD_TAGS or bool(_BOLD_STYLE.search(tag.get("style") or ""))
+
+
+def _mark_bold(soup):
+    """Wrap bold elements' text in placeholder markers (outermost bold only)."""
+    total = len(soup.get_text(strip=True)) or 1
+    chosen, chosen_ids = [], set()
+    for tag in soup.find_all(True):
+        if not _is_bold(tag) or tag.find(_BLOCK_TAGS):
+            continue  # not bold, or a whole bold-styled layout block
+        if any(id(parent) in chosen_ids for parent in tag.parents):
+            continue  # already inside a bold element
+        text_len = len(tag.get_text(strip=True))
+        if text_len:
+            chosen.append((tag, text_len))
+            chosen_ids.add(id(tag))
+    if sum(n for _, n in chosen) > MAX_BOLD_SHARE * total:
+        return  # (nearly) everything is bold: keep it plain
+    for tag, _ in chosen:
+        tag.insert(0, BOLD_OPEN)
+        tag.append(BOLD_CLOSE)
+
+
+def _apply_bold(text):
+    """Turn bold markers into Discord **bold**, per line, with spaces outside the stars."""
+    def to_markdown(match):
+        lines = []
+        for line in match.group(1).split("\n"):
+            core = line.strip()
+            if core:
+                lead = line[:len(line) - len(line.lstrip())]
+                trail = line[len(line.rstrip()):]
+                lines.append(f"{lead}**{core}**{trail}")
             else:
-                body = decoded
-    
-    return clean_email_body(body.strip())
+                lines.append(line)
+        return "\n".join(lines)
+    text = re.sub(r"\x01([^\x01\x02]*)\x02", to_markdown, text)
+    text = text.replace(BOLD_OPEN, "").replace(BOLD_CLOSE, "")
+    # Tidy spaces the markers left behind at line edges / between words.
+    return "\n".join(re.sub(r" {2,}", " ", line).strip() for line in text.split("\n"))
+
+
+LINE_BREAK, PARA_BREAK = "\x06", "\x05"
+GROUP_OPEN, GROUP_CLOSE = "\x03", "\x04"
+_PARAGRAPH_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "blockquote",
+                   "ul", "ol", "table"}
+MAX_GROUP_SHARE = 0.6   # a "box" covering more of the email than this is just the page wrapper
+MIN_GROUP_CHARS = 20
+_BG_STYLE = re.compile(r"background(?:-color)?\s*:\s*([^;]+)", re.I)
+_NOT_A_BOX = {"#fff", "#ffffff", "white", "transparent", "none", "inherit", "initial", ""}
+
+
+def _box_color(tag):
+    """Background colour that makes this element a visual box/card, or None.
+
+    Borders alone don't count: emails use them for page frames and dividers.
+    """
+    color = (tag.get("bgcolor") or "").strip().lower()
+    match = _BG_STYLE.search(tag.get("style") or "")
+    if match:
+        color = match.group(1).strip().lower()
+    if color.startswith("url(") or "!important" in color:
+        color = color.split("!important")[0].strip()
+    if not color or color in _NOT_A_BOX or color.startswith("url("):
+        return None
+    return color
+
+
+def _mark_groups(soup):
+    """Mark visually boxed sections (cards, callouts) so they render as quote blocks.
+
+    Markers carry a colour key so that adjacent boxes with the same background
+    (a card built from several tables) merge into one group later.
+    """
+    total = len(soup.get_text(strip=True)) or 1
+    chosen_ids, color_keys = set(), {}
+    for tag in soup.find_all(["div", "td", "th", "table", "section"]):
+        color = _box_color(tag)
+        if not color or not tag.find(["div", "p", "table", "tr", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"]):
+            continue  # no background, or a single-element box such as a button
+        if any(id(parent) in chosen_ids for parent in tag.parents):
+            continue  # Discord can't nest quotes; keep the outermost box
+        text_len = len(tag.get_text(strip=True))
+        if MIN_GROUP_CHARS <= text_len <= MAX_GROUP_SHARE * total:
+            chosen_ids.add(id(tag))
+            key = color_keys.setdefault(color, len(color_keys))
+            tag.insert(0, f"{GROUP_OPEN}{key}{GROUP_OPEN}")
+            tag.append(GROUP_CLOSE)
+            tag.insert_before(PARA_BREAK)
+            tag.insert_after(PARA_BREAK)
+
+
+def _apply_groups(text):
+    """Render marked groups as Discord quote blocks, kept tight (no blank lines inside)."""
+    # Merge neighbouring groups of the same colour (nothing but whitespace between).
+    merge = re.compile(r"(\x03(\d+)\x03[^\x03\x04]*)\x04\s*\x03\2\x03")
+    while True:
+        merged = merge.sub(lambda m: m.group(1) + "\n", text)
+        if merged == text:
+            break
+        text = merged
+
+    def to_quote(match):
+        lines = [line for line in match.group(1).split("\n") if line.strip()]
+        if not lines:
+            return ""
+        if len(lines) == 1:  # a one-liner box reads fine as a normal paragraph
+            return "\n\n" + lines[0] + "\n\n"
+        return "\n\n" + "\n".join("> " + line for line in lines) + "\n\n"
+    text = re.sub(r"\x03\d+\x03(.*?)\x04", to_quote, text, flags=re.S)
+    return re.sub(r"[\x03\x04]", "", text)
+
+
+def _html_to_text(html):
+    """Readable text from HTML: paragraphs on their own lines, inline text kept together."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["style", "script", "head", "title", "meta"]):
+        tag.decompose()
+    # Hidden elements (e.g. the preheader) are not part of the visible email.
+    for tag in soup.find_all(style=re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden|max-height\s*:\s*0", re.I)):
+        tag.decompose()
+    # Source-code line breaks inside a paragraph are just spaces, unless the
+    # element preserves them (<pre>, white-space: pre/pre-wrap/break-spaces).
+    for node in soup.find_all(string=True):
+        if type(node) is not NavigableString:  # comments, doctype, CDATA, etc.
+            node.extract()
+        elif _preserves_newlines(node):
+            node.replace_with(re.sub(r"[ \t\r\f\v]+", " ", str(node)))
+        else:
+            node.replace_with(re.sub(r"\s+", " ", str(node)))
+    _mark_groups(soup)
+    _mark_bold(soup)
+    # Links/buttons become placeholders, turned into Discord [text](url) links later.
+    links = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        text = re.sub(r"\s+", " ", a.get_text(" ")).strip()
+        if (text and href.lower().startswith(("https://", "http://"))
+                and len(href) <= MAX_LINK_URL and text.rstrip("/") != href.rstrip("/")):
+            links.append((text, href))
+            a.replace_with(f"\x00{len(links) - 1}\x00")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for tag in soup.find_all(_BLOCK_TAGS):
+        brk = PARA_BREAK if tag.name in _PARAGRAPH_TAGS else LINE_BREAK
+        tag.insert_before(brk)
+        tag.insert_after(brk)
+    text = soup.get_text()
+    # Collapse each run of breaks: a paragraph break (or a real <br>/text newline)
+    # gives a blank line; layout-only breaks give a single line break.
+    text = re.sub(
+        r"[\s\x05\x06]*[\x05\x06][\s\x05\x06]*",
+        lambda m: "\n\n" if (PARA_BREAK in m.group() or "\n" in m.group()) else "\n",
+        text,
+    )
+    return text, links
+
+
+def _restore_links(text, links):
+    """Swap link placeholders for Discord masked links."""
+    def to_markdown(match):
+        label, url = links[int(match.group(1))]
+        label = _apply_bold(label).strip().replace("[", "(").replace("]", ")")
+        return f"[{label}]({url})"
+    return re.sub(r"\x00(\d+)\x00", to_markdown, text)
+
+
+def _px(value):
+    match = re.match(r"\s*(\d+)", str(value or ""))
+    return int(match.group(1)) if match else None
+
+
+def extract_main_image(html):
+    """Pick the email's main (largest) image URL for the Discord embed, if any."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    best, best_score = None, 0
+    for img in soup.find_all("img"):
+        src = (img.get("src") or "").strip()
+        if not src.lower().startswith(("https://", "http://")):
+            continue  # cid: inline images can't be shown by Discord
+        low = src.lower()
+        if any(k in low for k in ("track", "pixel", "beacon", "spacer", "/open", "1x1", "blank.gif")):
+            continue
+        style = img.get("style") or ""
+        width = _px(img.get("width")) or _px((re.search(r"(?<![-\w])width\s*:\s*(\d+)px", style) or [None, None])[1])
+        height = _px(img.get("height")) or _px((re.search(r"(?<![-\w])height\s*:\s*(\d+)px", style) or [None, None])[1])
+        if (width and width < 200) or (height and height < 80):
+            continue  # logos, icons, badges, tracking pixels
+        score = width or 300
+        if score > best_score:
+            best, best_score = src, score
+    return best
+
+
+def get_email_content(payload):
+    """Return (clean body text, main image URL or None) for a Gmail message payload."""
+    found = {}
+    _collect_parts(payload, found)
+    plain = _normalize_text(found.get("plain", ""))
+    html = found.get("html", "")
+    html_text = ""
+    if html:
+        raw_text, links = _html_to_text(html)
+        html_text = _restore_links(_apply_groups(_apply_bold(_normalize_text(raw_text))), links)
+        html_text = re.sub(r"\n{3,}", "\n\n", html_text).strip()
+    # The HTML part is what Gmail shows; plain-text parts are often auto-generated
+    # junk (CSS, tracking links, one word per line). Fall back to plain if needed.
+    body = html_text or plain
+    return clean_email_body(body), extract_main_image(html)
+
+
+def get_email_body(payload):
+    """Extract the cleaned email body text from a message payload."""
+    return get_email_content(payload)[0]
 
 
 def clean_email_body(body):
@@ -222,8 +484,9 @@ def clean_email_body(body):
     skip_rest = False
     
     for line in lines:
-        line_lower = line.lower().strip()
-        
+        # Judge lines by what the reader sees, not by the URLs inside links.
+        line_lower = _visible_text(line).lower().strip()
+
         if skip_rest:
             continue
         
@@ -237,7 +500,9 @@ def clean_email_body(body):
             "the views expressed in this email"
         ]
         
-        if any(marker in line_lower for marker in stop_markers):
+        # Short "Privacy | Terms | Unsubscribe"-style lines start the footer.
+        is_footer_links = "unsubscribe" in line_lower and len(line_lower) < 120
+        if is_footer_links or any(marker in line_lower for marker in stop_markers):
             skip_rest = True
             continue
         
@@ -269,6 +534,37 @@ def clean_email_body(body):
     return result.strip()
 
 
+_MD_LINK = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+DISCORD_DESCRIPTION_LIMIT = 4096
+
+
+def _visible_text(text):
+    """Text as Discord displays it: masked links show only their label."""
+    return re.sub(r"^> ", "", _MD_LINK.sub(r"\1", text).replace("**", ""), flags=re.M)
+
+
+def truncate_body(text, max_visible=1500):
+    """Cap the body by *visible* length, cutting only between lines so links stay whole.
+
+    Link URLs don't count toward max_visible, but the raw text must still fit
+    Discord's 4096-character description limit.
+    """
+    raw_limit = DISCORD_DESCRIPTION_LIMIT - 10
+    if len(_visible_text(text)) <= max_visible and len(text) <= raw_limit:
+        return text
+    kept, visible, raw = [], 0, 0
+    for line in text.split("\n"):
+        line_visible = len(_visible_text(line)) + 1
+        if visible + line_visible > max_visible or raw + len(line) + 1 > raw_limit:
+            if not kept:  # first line alone is too long: fall back to a plain cut
+                kept.append(_visible_text(line)[:max_visible - 3])
+            break
+        kept.append(line)
+        visible += line_visible
+        raw += len(line) + 1
+    return "\n".join(kept).rstrip() + " …"
+
+
 def truncate_text(text, max_length=1024):
     """Truncate text to fit Discord embed field limits."""
     if len(text) <= max_length:
@@ -277,13 +573,13 @@ def truncate_text(text, max_length=1024):
 
 
 def send_email_embed(sender, subject, body, date_str, attachments_count=0,
-                     received_ms=None, missed=False):
+                     received_ms=None, missed=False, image_url=None):
     """Send email as Discord embed.
 
     received_ms: Gmail's internalDate (when the email reached the mailbox).
     missed: True if it arrived while the monitor was offline.
     """
-    body_truncated = truncate_text(body, 2000) if body else "*(Empty message)*"
+    body_truncated = truncate_body(body, 1500) if body else "*(Empty message)*"
 
     sender_name = sender
     if '<' in sender and '>' in sender:
@@ -315,6 +611,8 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0,
         },
         "fields": []
     }
+    if image_url:
+        embed["image"] = {"url": image_url}
     
     metadata_parts = []
     if missed:
@@ -406,7 +704,7 @@ def process_email(message_id, missed=False):
             format="full"
         ).execute()
 
-        body = get_email_body(full_msg_data["payload"])
+        body, image_url = get_email_content(full_msg_data["payload"])
 
         attachments_count = 0
         if "parts" in full_msg_data["payload"]:
@@ -416,7 +714,8 @@ def process_email(message_id, missed=False):
 
         # Send to Discord; leave the email unread if delivery fails.
         if not send_email_embed(sender, subject, body, date_str, attachments_count,
-                                received_ms=received_ms, missed=missed):
+                                received_ms=received_ms, missed=missed,
+                                image_url=image_url):
             logger.error(f"   ❌ Failed to send to Discord (will retry)")
             return "failed"
         logger.info(f"   ✅ Sent to Discord")
