@@ -81,6 +81,7 @@ Logs print to the terminal; `Ctrl + C` stops it.
 - Every embed shows when Gmail **received** the email, in each viewer's own timezone (e.g. "November 15, 2026 5:40 AM (2 hours ago)").
 - The very first run starts from "now"; it does not dump your existing inbox. Delete `config/monitor_state.json` to reset to that.
 - Marks an email as read **only after** Discord accepts it; failed sends are retried on the next sync.
+- **Security emails are never forwarded.** Verification codes, password resets, sign-in/security alerts, 2FA and email-confirmation messages appear in Discord only as a grey "🔒 Security email (content hidden)" notice: sender and time, no subject, body, links or image. They stay **unread** in Gmail, and the log doesn't record their subject. Add your own trigger phrases with `SENSITIVE_KEYWORDS=phrase one,phrase two` in `.env`.
 - Renews the Gmail watch every 24 hours (Gmail expires watches after 7 days).
 - Restarts the Pub/Sub listener automatically if it drops.
 

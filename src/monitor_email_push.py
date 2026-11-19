@@ -572,13 +572,54 @@ def truncate_text(text, max_length=1024):
     return text[:max_length-3] + "..."
 
 
+# ===== Sensitive-email filter =====
+# Emails matching these are never forwarded in full: if the Discord channel or
+# account is compromised, codes / reset links must not be sitting there.
+_SENSITIVE_PATTERNS = [
+    r"verification code", r"verify (?:your |my )?(?:email|e-mail|account|identity|sign[- ]?in|login|device)",
+    r"(?:confirm|activate) your (?:email|e-mail|account|identity)",
+    r"one[- ]time (?:pass(?:word|code)|code|pin|link|login)", r"\botp\b", r"\bpass ?code\b",
+    r"security code",
+    r"(?:login|log-in|sign[- ]?in|access|authentication|auth|confirmation|recovery|backup|"
+    r"activation|2fa|mfa|device|single[- ]use) code",
+    r"(?:reset|change|forgot|recover)\w* (?:your )?password", r"password (?:reset|change|recovery)",
+    r"two[- ]factor", r"2-step", r"\b2fa\b", r"\bmfa\b", r"multi[- ]factor",
+    r"magic (?:sign[- ]?in |login )?link", r"(?:sign[- ]?in|login) link",
+    r"account recovery", r"recovery (?:email|phone)",
+    r"(?:new|suspicious|unusual|unrecognized) (?:sign[- ]?in|login|log-in|device)",
+    r"security alert", r"your (?:code|pin) is",
+    # A 4-8 digit number right next to "code"/"PIN"/"OTP" (e.g. "Your code: 482913")
+    r"\b(?:code|pin|otp)\b[^0-9\n]{0,30}\b\d{4,8}\b",
+    r"\b\d{4,8}\b[^0-9\n]{0,20}\b(?:is your|is the)\b[^\n]{0,20}\b(?:code|pin|otp)\b",
+]
+_extra = [k.strip() for k in os.getenv("SENSITIVE_KEYWORDS", "").split(",") if k.strip()]
+_SENSITIVE_RE = re.compile(
+    "|".join(_SENSITIVE_PATTERNS + [re.escape(k) for k in _extra]), re.I
+)
+COLOR_REDACTED = 0x9E9E9E  # grey
+
+
+def sensitive_reason(subject, body):
+    """Return the phrase that marks this email as sensitive, or None."""
+    match = _SENSITIVE_RE.search(f"{subject}\n{_visible_text(body or '')}")
+    return match.group(0) if match else None
+
+
 def send_email_embed(sender, subject, body, date_str, attachments_count=0,
-                     received_ms=None, missed=False, image_url=None):
+                     received_ms=None, missed=False, image_url=None, redacted=False):
     """Send email as Discord embed.
 
     received_ms: Gmail's internalDate (when the email reached the mailbox).
     missed: True if it arrived while the monitor was offline.
+    redacted: True for security emails; only sender and time are sent.
     """
+    if redacted:
+        subject = "🔒 Security email (content hidden)"
+        body = ("This looks like a **verification code, password reset or sign-in alert**, "
+                "so its contents were not sent to Discord.\n\nOpen Gmail to read it. "
+                "It has been left **unread**.")
+        image_url = None
+        attachments_count = 0
     body_truncated = truncate_body(body, 1500) if body else "*(Empty message)*"
 
     sender_name = sender
@@ -603,7 +644,7 @@ def send_email_embed(sender, subject, body, date_str, attachments_count=0,
     embed = {
         "title": truncate_text(subject or "(No Subject)", 256),
         "description": body_truncated,
-        "color": COLOR_MISSED if missed else COLOR_LIVE,
+        "color": COLOR_REDACTED if redacted else (COLOR_MISSED if missed else COLOR_LIVE),
         "timestamp": embed_timestamp,
         "author": {
             "name": truncate_text(sender_name, 256),
@@ -693,10 +734,6 @@ def process_email(message_id, missed=False):
         date_str = next((h["value"] for h in headers if h["name"] == "Date"), "")
         received_ms = msg_data.get("internalDate")
 
-        tag = "📬 MISSED EMAIL" if missed else "🚀 NEW EMAIL"
-        logger.info(f"{tag} - From: {sender}")
-        logger.info(f"   Subject: {subject}")
-
         # Get full message for body
         full_msg_data = service.users().messages().get(
             userId="me",
@@ -705,6 +742,15 @@ def process_email(message_id, missed=False):
         ).execute()
 
         body, image_url = get_email_content(full_msg_data["payload"])
+        reason = sensitive_reason(subject, body)
+
+        tag = "📬 MISSED EMAIL" if missed else "🚀 NEW EMAIL"
+        logger.info(f"{tag} - From: {sender}")
+        if reason:
+            # Don't write the subject either: it often contains the code itself.
+            logger.info(f"   🔒 Sensitive (matched '{reason[:40]}'); content hidden, left unread")
+        else:
+            logger.info(f"   Subject: {subject}")
 
         attachments_count = 0
         if "parts" in full_msg_data["payload"]:
@@ -715,12 +761,13 @@ def process_email(message_id, missed=False):
         # Send to Discord; leave the email unread if delivery fails.
         if not send_email_embed(sender, subject, body, date_str, attachments_count,
                                 received_ms=received_ms, missed=missed,
-                                image_url=image_url):
+                                image_url=image_url, redacted=bool(reason)):
             logger.error(f"   ❌ Failed to send to Discord (will retry)")
             return "failed"
         logger.info(f"   ✅ Sent to Discord")
 
-        if "UNREAD" in labels:
+        # Security emails stay unread so you notice them in Gmail.
+        if "UNREAD" in labels and not reason:
             service.users().messages().modify(
                 userId="me",
                 id=message_id,
